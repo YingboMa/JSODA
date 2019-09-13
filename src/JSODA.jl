@@ -1,6 +1,39 @@
 module JSODA
 
 #=
+using C2Julia
+using Clang
+using Clang.LibClang
+
+lsoda = joinpath(@__DIR__)
+liblsoda_c = joinpath(lsoda, "lsoda.c")
+
+ctx = DefaultContext()
+
+std_headers = find_std_headers()
+compiler_flags = ["-I$LLVM_INCLUDE", ("-I".*std_headers)...]
+
+push!(ctx.trans_units, TranslationUnit(ctx.index,
+                                       liblsoda_c,
+                                       compiler_flags,
+                                       CXTranslationUnit_None))
+
+root_cursor = getcursor(ctx.trans_units[1])
+header = spelling(root_cursor)
+ctx.children = children(root_cursor)
+
+funs = filter(x -> filename(x)==header, ctx.children)
+cfuns = map(x->search(root_cursor, spelling(x)) |> last, funs)
+
+outpath = joinpath(@__DIR__, "lsoda_test.jl")
+open(outpath, "w+") do f
+    for cfun in cfuns
+        println(f, translate(cfun).expr)
+    end
+end
+=#
+
+#=
 mutable struct Ctx{F,D,C<:Common,O<:Opt}
     f::F
     data::D
@@ -172,7 +205,7 @@ function idamax(n, dx, incx)
         return xindex
     end
     if incx != 1
-        dmax = fabs(dx[2])
+        dmax = fabs(dx[1])
         ii = 2
         begin
             xmag = fabs(dx[i + 1])
@@ -184,7 +217,7 @@ function idamax(n, dx, incx)
         end
         return xindex
     end
-    dmax = fabs(dx[2])
+    dmax = fabs(dx[1])
     begin
         xmag = fabs(dx[i + 1])
         if xmag > dmax
@@ -374,6 +407,840 @@ function dgefa(a, n, ipvt, info)
         info[] = n
     end
 end
+function stoda(neq, y, f, _data)
+    local corflag
+    local orderflag
+    local i
+    local i1
+    local j
+    local m
+    local ncf
+    local del
+    local delp
+    local dsm
+    local dup
+    local exup
+    local r
+    local rh
+    local rhup
+    local told
+    local pdh
+    local pnorm
+    kflag = 0
+    told = tn
+    ncf = 0
+    ierpj = 0
+    iersl = 0
+    jcur = 0
+    delp = 0.0
+    if jstart == 0
+        lmax = maxord + 1
+        nq = 1
+        l = 2
+        ialth = 2
+        rmax = 10000.0
+        rc = 0.0
+        el0 = 1.0
+        crate = 0.7
+        hold = h
+        nslp = 0
+        ipup = miter
+        icount = 20
+        irflag = 0
+        pdest = 0.0
+        pdlast = 0.0
+        ratio = 5.0
+        cfode(2)
+        cm2[i + 1] = (tesco[i + 1])[2] * (elco[i + 1])[(i + 1) + 1]
+        cfode(1)
+        cm1[i + 1] = (tesco[i + 1])[2] * (elco[i + 1])[(i + 1) + 1]
+        resetcoeff()
+    end
+    if jstart == -1
+        ipup = miter
+        lmax = maxord + 1
+        if ialth == 1
+            ialth = 2
+        end
+        if meth != mused
+            cfode(meth)
+            ialth = l
+            resetcoeff()
+        end
+        if h != hold
+            rh = h / hold
+            h = hold
+            @c scaleh(&rh, &pdh)
+        end
+    end
+    if jstart == -2
+        if h != hold
+            rh = h / hold
+            h = hold
+            @c scaleh(&rh, &pdh)
+        end
+    end
+    while 1
+        while 1
+            if fabs(rc - 1.0) > ccmax
+                ipup = miter
+            end
+            if nst >= nslp + msbp
+                ipup = miter
+            end
+            tn += h
+            begin
+                yp1 = yh[i1 + 1]
+                yp2 = yh[(i1 + 1) + 1]
+                yp1[i + 1] += yp2[i + 1]
+            end
+            pnorm = vmnorm(n, yh[1], ewt)
+            @c correction(neq, y, f, &corflag, pnorm, &del, &delp, &told, &ncf, &rh, &m, _data)
+            if corflag == 0
+                break
+            end
+            if corflag == 1
+                rh = @warn("max(rh,hmin/fabs(h))")
+                @c scaleh(&rh, &pdh)
+                continue
+            end
+            if corflag == 2
+                kflag = -2
+                hold = h
+                jstart = 1
+                return
+            end
+        end
+        jcur = 0
+        if m == 0
+            dsm = del / (tesco[nq + 1])[2]
+        end
+        if m > 0
+            dsm = vmnorm(n, acor, ewt) / (tesco[nq + 1])[2]
+        end
+        if dsm <= 1.0
+            kflag = 0
+            nst += 1
+            hu = h
+            nqu = nq
+            mused = meth
+            begin
+                yp1 = yh[j + 1]
+                r = el[j + 1]
+                yp1[i + 1] += r * acor[i + 1]
+            end
+            icount -= 1
+            if icount < 0
+                @c methodswitch(dsm, pnorm, &pdh, &rh)
+                if meth != mused
+                    rh = @warn("max(rh,hmin/fabs(h))")
+                    @c scaleh(&rh, &pdh)
+                    rmax = 10.0
+                    endstoda()
+                    break
+                end
+            end
+            ialth -= 1
+            if ialth == 0
+                rhup = 0.0
+                if l != lmax
+                    yp1 = yh[lmax + 1]
+                    savf[i + 1] = acor[i + 1] - yp1[i + 1]
+                    dup = vmnorm(n, savf, ewt) / (tesco[nq + 1])[3]
+                    exup = 1.0 / Cdouble(l + 1)
+                    rhup = 1.0 / (1.4 * pow(dup, exup) + 1.4e-6)
+                end
+                @c orderswitch(&rhup, dsm, &pdh, &rh, &orderflag)
+                if orderflag == 0
+                    endstoda()
+                    break
+                end
+                if orderflag == 1
+                    rh = @warn("max(rh,hmin/fabs(h))")
+                    @c scaleh(&rh, &pdh)
+                    rmax = 10.0
+                    endstoda()
+                    break
+                end
+                if orderflag == 2
+                    resetcoeff()
+                    rh = @warn("max(rh,hmin/fabs(h))")
+                    @c scaleh(&rh, &pdh)
+                    rmax = 10.0
+                    endstoda()
+                    break
+                end
+            end
+            if ialth > 1 || l == lmax
+                endstoda()
+                break
+            end
+            yp1 = yh[lmax + 1]
+            yp1[i + 1] = acor[i + 1]
+            endstoda()
+            break
+        else
+            kflag -= 1
+            tn = told
+            begin
+                yp1 = yh[i1 + 1]
+                yp2 = yh[(i1 + 1) + 1]
+                yp1[i + 1] -= yp2[i + 1]
+            end
+            rmax = 2.0
+            if fabs(h) <= hmin * 1.00001
+                kflag = -1
+                hold = h
+                jstart = 1
+                break
+            end
+            if kflag > -3
+                rhup = 0.0
+                @c orderswitch(&rhup, dsm, &pdh, &rh, &orderflag)
+                if orderflag == 1 || orderflag == 0
+                    if orderflag == 0
+                        rh = @warn("min(rh,0.2)")
+                    end
+                    rh = @warn("max(rh,hmin/fabs(h))")
+                    @c scaleh(&rh, &pdh)
+                end
+                if orderflag == 2
+                    resetcoeff()
+                    rh = @warn("max(rh,hmin/fabs(h))")
+                    @c scaleh(&rh, &pdh)
+                end
+                continue
+            else
+                if kflag == -10
+                    kflag = -1
+                    hold = h
+                    jstart = 1
+                    break
+                else
+                    rh = 0.1
+                    rh = @warn("max(hmin/fabs(h),rh)")
+                    h *= rh
+                    yp1 = yh[1]
+                    y[i + 1] = yp1[i + 1]
+                    (tn, y + 1, savf + 1, _data)
+                    nfe += 1
+                    yp1 = yh[2]
+                    yp1[i + 1] = h * savf[i + 1]
+                    ipup = miter
+                    ialth = 5
+                    if nq == 1
+                        continue
+                    end
+                    nq = 1
+                    l = 2
+                    resetcoeff()
+                    continue
+                end
+            end
+        end
+    end
+end
+function correction(neq, y, f, corflag, pnorm, del, delp, told, ncf, rh, m, _data)
+    local i
+    local rm
+    local rate
+    local dcon
+    m[] = 0
+    corflag[] = 0
+    rate = 0.0
+    del[] = 0.0
+    yp1 = yh[1]
+    y[i + 1] = yp1[i + 1]
+    (tn, y + 1, savf + 1, _data)
+    nfe += 1
+    while 1
+        if m[] == 0
+            if ipup > 0
+                prja(neq, y, f, _data)
+                ipup = 0
+                rc = 1.0
+                nslp = nst
+                crate = 0.7
+                if ierpj != 0
+                    corfailure(told, rh, ncf, corflag)
+                    return
+                end
+            end
+            acor[i + 1] = 0.0
+        end
+        if miter == 0
+            yp1 = yh[2]
+            begin
+                savf[i + 1] = h * savf[i + 1] - yp1[i + 1]
+                y[i + 1] = savf[i + 1] - acor[i + 1]
+            end
+            del[] = vmnorm(n, y, ewt)
+            yp1 = yh[1]
+            begin
+                y[i + 1] = yp1[i + 1] + el[1] * savf[i + 1]
+                acor[i + 1] = savf[i + 1]
+            end
+        else
+            yp1 = yh[2]
+            y[i + 1] = h * savf[i + 1] - (yp1[i + 1] + acor[i + 1])
+            solsy(y)
+            del[] = vmnorm(n, y, ewt)
+            yp1 = yh[1]
+            begin
+                acor[i + 1] += y[i + 1]
+                y[i + 1] = yp1[i + 1] + el[1] * acor[i + 1]
+            end
+        end
+        if del[] <= (100.0pnorm) * ETA
+            break
+        end
+        if m[] != 0 || meth != 1
+            if m[] != 0
+                rm = 1024.0
+                if del[] <= 1024.0 * delp[]
+                    rm = del[] / delp[]
+                end
+                rate = @warn("max(rate,rm)")
+                crate = @warn("max(0.2*crate,rm)")
+            end
+            dcon = (del[] * @warn("min(1.,1.5*crate)")) / ((tesco[nq + 1])[2] * conit)
+            if dcon <= 1.0
+                pdest = @warn("max(pdest,rate/fabs(h*el[1]))")
+                if pdest != 0.0
+                    pdlast = pdest
+                end
+                break
+            end
+        end
+        (m[])[]
+        if m[] == maxcor || m[] >= 2 && del[] > 2.0 * delp[]
+            if miter == 0 || jcur == 1
+                corfailure(told, rh, ncf, corflag)
+                return
+            end
+            ipup = miter
+            m[] = 0
+            rate = 0.0
+            del[] = 0.0
+            yp1 = yh[1]
+            y[i + 1] = yp1[i + 1]
+            (tn, y + 1, savf + 1, _data)
+            nfe += 1
+        else
+            delp[] = del[]
+            (tn, y + 1, savf + 1, _data)
+            nfe += 1
+        end
+    end
+end
+function prja(neq, y, f, _data)
+    local i
+    local ier
+    local j
+    local fac
+    local hl0
+    local r
+    local r0
+    local yj
+    nje += 1
+    ierpj = 0
+    jcur = 1
+    hl0 = h * el0
+    if miter != 2
+        fprintf(__stderrp, "[prja] miter != 2\n")
+        return
+    end
+    if miter == 2
+        fac = vmnorm(n, savf, ewt)
+        r0 = (((1000.0 * fabs(h)) * ETA) * Cdouble(n)) * fac
+        if r0 == 0.0
+            r0 = 1.0
+        end
+        begin
+            yj = y[j + 1]
+            r = @warn("max(sqrteta*fabs(yj),r0/ewt[j])")
+            y[j + 1] += r
+            fac = -hl0 / r
+            (tn, y + 1, acor + 1, _data)
+            (wm[i + 1])[j + 1] = (acor[i + 1] - savf[i + 1]) * fac
+            y[j + 1] = yj
+        end
+        nfe += n
+        pdnorm = fnorm(n, wm, ewt) / fabs(hl0)
+        (wm[i + 1])[i + 1] += 1.0
+        @c dgefa(wm, n, ipvt, &ier)
+        if ier != 0
+            ierpj = 1
+        end
+        return
+    end
+end
+function terminate(istate)
+    if illin == 5
+        fprintf(__stderrp, "[lsoda] repeated occurrence of illegal input. run aborted.. apparent infinite loop\n")
+    else
+        illin += 1
+        istate[] = -3
+    end
+end
+function terminate2(y, t)
+    local i
+    yp1 = yh[1]
+    y[i + 1] = yp1[i + 1]
+    t[] = tn
+    illin = 0
+    freevectors()
+    return
+end
+function successreturn(y, t, itask, ihit, tcrit, istate)
+    local i
+    yp1 = yh[1]
+    y[i + 1] = yp1[i + 1]
+    t[] = tn
+    if itask == 4 || itask == 5
+        if ihit
+            t[] = tcrit
+        end
+    end
+    istate[] = 2
+    illin = 0
+    freevectors()
+end
+function freevectors()
+end
+function _freevectors()
+    local i
+    if wm
+        free(wm[i + 1])
+    end
+    if yh
+        free(yh[i + 1])
+    end
+    free(yh)
+    free(wm)
+    free(ewt)
+    free(savf)
+    free(acor)
+    free(ipvt)
+    g_nyh = (g_lenyh = 0)
+    yh = 0
+    wm = 0
+    ewt = 0
+    savf = 0
+    acor = 0
+    ipvt = 0
+end
+function ewset(itol, rtol, atol, ycur)
+    local i
+    @switch itol begin
+            @case 1
+            ewt[i + 1] = rtol[1] * fabs(ycur[i + 1]) + atol[1]
+            break
+            @case 2
+            ewt[i + 1] = rtol[1] * fabs(ycur[i + 1]) + atol[i + 1]
+            break
+            @case 3
+            ewt[i + 1] = rtol[i + 1] * fabs(ycur[i + 1]) + atol[1]
+            break
+            @case 4
+            ewt[i + 1] = rtol[i + 1] * fabs(ycur[i + 1]) + atol[i + 1]
+            break
+        end
+end
+function resetcoeff()
+    local i
+    local ep1
+    ep1 = elco[nq + 1]
+    el[i + 1] = ep1[i + 1]
+    rc = (rc * el[1]) / el0
+    el0 = el[1]
+    conit = 0.5 / Cdouble(nq + 2)
+end
+function solsy(y)
+    iersl = 0
+    if miter != 2
+        printf("solsy -- miter != 2\n")
+        return
+    end
+    if miter == 2
+        dgesl(wm, n, ipvt, y, 0)
+    end
+    return
+end
+function endstoda()
+    local r
+    local i
+    r = 1.0 / (tesco[nqu + 1])[2]
+    acor[i + 1] *= r
+    hold = h
+    jstart = 1
+end
+function orderswitch(rhup, dsm, pdh, rh, orderflag)
+    local newq
+    local i
+    local exsm
+    local rhdn
+    local rhsm
+    local ddn
+    local exdn
+    local r
+    orderflag[] = 0
+    exsm = 1.0 / Cdouble(l)
+    rhsm = 1.0 / (1.2 * pow(dsm, exsm) + 1.2e-6)
+    rhdn = 0.0
+    if nq != 1
+        ddn = vmnorm(n, yh[l + 1], ewt) / (tesco[nq + 1])[1]
+        exdn = 1.0 / Cdouble(nq)
+        rhdn = 1.0 / (1.3 * pow(ddn, exdn) + 1.3e-6)
+    end
+    if meth == 1
+        pdh[] = @warn("max(fabs(h)*pdlast,0.000001)")
+        if l < lmax
+            rhup[] = @warn("min(*rhup,sm1[l]/*pdh)")
+        end
+        rhsm = @warn("min(rhsm,sm1[nq]/*pdh)")
+        if nq > 1
+            rhdn = @warn("min(rhdn,sm1[nq-1]/*pdh)")
+        end
+        pdest = 0.0
+    end
+    if rhsm >= rhup[]
+        if rhsm >= rhdn
+            newq = nq
+            rh[] = rhsm
+        else
+            newq = nq - 1
+            rh[] = rhdn
+            if kflag < 0 && rh[] > 1.0
+                rh[] = 1.0
+            end
+        end
+    else
+        if rhup[] <= rhdn
+            newq = nq - 1
+            rh[] = rhdn
+            if kflag < 0 && rh[] > 1.0
+                rh[] = 1.0
+            end
+        else
+            rh[] = rhup[]
+            if rh[] >= 1.1
+                r = el[l + 1] / Cdouble(l)
+                nq = l
+                l = nq + 1
+                yp1 = yh[l + 1]
+                yp1[i + 1] = acor[i + 1] * r
+                orderflag[] = 2
+                return
+            else
+                ialth = 3
+                return
+            end
+        end
+    end
+    if meth == 1
+        if (rh[] * pdh[]) * 1.00001 < sm1[newq + 1]
+            if kflag == 0 && rh[] < 1.1
+                ialth = 3
+                return
+            end
+        end
+    else
+        if kflag == 0 && rh[] < 1.1
+            ialth = 3
+            return
+        end
+    end
+    if kflag <= -2
+        rh[] = @warn("min(*rh,0.2)")
+    end
+    if newq == nq
+        orderflag[] = 1
+        return
+    end
+    nq = newq
+    l = nq + 1
+    orderflag[] = 2
+end
+function intdy(t, k, dky, iflag)
+    local i
+    local ic
+    local j
+    local jj
+    local jp1
+    local c
+    local r
+    local s
+    local tp
+    iflag[] = 0
+    if k < 0 || k > nq
+        fprintf(__stderrp, "[intdy] k = %d illegal\n", k)
+        iflag[] = -1
+        return
+    end
+    tp = (tn - hu) - (100.0ETA) * (tn + hu)
+    if (t - tp) * (t - tn) > 0.0
+        fprintf(__stderrp, "intdy -- t = %g illegal. t not in interval tcur - hu to tcur\n", t)
+        iflag[] = -2
+        return
+    end
+    s = (t - tn) / h
+    ic = 1
+    ic *= jj
+    c = Cdouble(ic)
+    yp1 = yh[l + 1]
+    dky[i + 1] = c * yp1[i + 1]
+    begin
+        jp1 = j + 1
+        ic = 1
+        ic *= jj
+        c = Cdouble(ic)
+        yp1 = yh[jp1 + 1]
+        dky[i + 1] = c * yp1[i + 1] + s * dky[i + 1]
+    end
+    if k == 0
+        return
+    end
+    r = pow(h, Cdouble(-k))
+    dky[i + 1] *= r
+end
+function corfailure(told, rh, ncf, corflag)
+    local j
+    local i1
+    local i
+    ncf += 1
+    rmax = 2.0
+    tn = told[]
+    begin
+        yp1 = yh[i1 + 1]
+        yp2 = yh[(i1 + 1) + 1]
+        yp1[i + 1] -= yp2[i + 1]
+    end
+    if fabs(h) <= hmin * 1.00001 || ncf[] == mxncf
+        corflag[] = 2
+        return
+    end
+    corflag[] = 1
+    rh[] = 0.25
+    ipup = miter
+end
+function methodswitch(dsm, pnorm, pdh, rh)
+    local lm1
+    local lm1p1
+    local lm2
+    local lm2p1
+    local nqm1
+    local nqm2
+    local rh1
+    local rh2
+    local rh1it
+    local exm2
+    local dm2
+    local exm1
+    local dm1
+    local alpha
+    local exsm
+    if meth == 1
+        if nq > 5
+            return
+        end
+        if dsm <= (100.0pnorm) * ETA || pdest == 0.0
+            if irflag == 0
+                return
+            end
+            rh2 = 2.0
+            nqm2 = @warn("min(nq,mxords)")
+        else
+            exsm = 1.0 / Cdouble(l)
+            rh1 = 1.0 / (1.2 * pow(dsm, exsm) + 1.2e-6)
+            rh1it = 2.0rh1
+            pdh[] = pdlast * fabs(h)
+            if pdh[] * rh1 > 1.0e-5
+                rh1it = sm1[nq + 1] / pdh[]
+            end
+            rh1 = @warn("min(rh1,rh1it)")
+            if nq > mxords
+                nqm2 = mxords
+                lm2 = mxords + 1
+                exm2 = 1.0 / Cdouble(lm2)
+                lm2p1 = lm2 + 1
+                dm2 = vmnorm(n, yh[lm2p1 + 1], ewt) / cm2[mxords + 1]
+                rh2 = 1.0 / (1.2 * pow(dm2, exm2) + 1.2e-6)
+            else
+                dm2 = dsm * (cm1[nq + 1] / cm2[nq + 1])
+                rh2 = 1.0 / (1.2 * pow(dm2, exsm) + 1.2e-6)
+                nqm2 = nq
+            end
+            if rh2 < ratio * rh1
+                return
+            end
+        end
+        rh[] = rh2
+        icount = 20
+        meth = 2
+        miter = jtyp
+        pdlast = 0.0
+        nq = nqm2
+        l = nq + 1
+        return
+    end
+    exsm = 1.0 / Cdouble(l)
+    if mxordn < nq
+        nqm1 = mxordn
+        lm1 = mxordn + 1
+        exm1 = 1.0 / Cdouble(lm1)
+        lm1p1 = lm1 + 1
+        dm1 = vmnorm(n, yh[lm1p1 + 1], ewt) / cm1[mxordn + 1]
+        rh1 = 1.0 / (1.2 * pow(dm1, exm1) + 1.2e-6)
+    else
+        dm1 = dsm * (cm2[nq + 1] / cm1[nq + 1])
+        rh1 = 1.0 / (1.2 * pow(dm1, exsm) + 1.2e-6)
+        nqm1 = nq
+        exm1 = exsm
+    end
+    rh1it = 2.0rh1
+    pdh[] = pdnorm * fabs(h)
+    if pdh[] * rh1 > 1.0e-5
+        rh1it = sm1[nqm1 + 1] / pdh[]
+    end
+    rh1 = @warn("min(rh1,rh1it)")
+    rh2 = 1.0 / (1.2 * pow(dsm, exsm) + 1.2e-6)
+    if rh1 * ratio < 5.0rh2
+        return
+    end
+    alpha = @warn("max(0.001,rh1)")
+    dm1 *= pow(alpha, exm1)
+    if dm1 <= (1000.0ETA) * pnorm
+        return
+    end
+    rh[] = rh1
+    icount = 20
+    meth = 1
+    miter = 0
+    pdlast = 0.0
+    nq = nqm1
+    l = nq + 1
+end
+function cfode(meth)
+    local i
+    local nq
+    local nqm1
+    local nqp1
+    local agamq
+    local fnq
+    local fnqm1
+    pc = 13
+    local pint
+    local ragq
+    local rqfac
+    local rq1fac
+    local tsign
+    local xpin
+    if meth == 1
+        (elco[1])[1] = 1.0
+        (elco[1])[2] = 1.0
+        (tesco[1])[1] = 0.0
+        (tesco[1])[2] = 2.0
+        (tesco[2])[1] = 1.0
+        (tesco[12])[3] = 0.0
+        pc[1] = 1.0
+        rqfac = 1.0
+        begin
+            rq1fac = rqfac
+            rqfac = rqfac / Cdouble(nq)
+            nqm1 = nq - 1
+            fnqm1 = Cdouble(nqm1)
+            nqp1 = nq + 1
+            pc[nq + 1] = 0.0
+            pc[i + 1] = pc[(i - 1) + 1] + fnqm1 * pc[i + 1]
+            pc[1] = fnqm1 * pc[1]
+            pint = pc[1]
+            xpin = pc[1] / 2.0
+            tsign = 1.0
+            begin
+                tsign = -tsign
+                pint += (tsign * pc[i + 1]) / Cdouble(i)
+                xpin += (tsign * pc[i + 1]) / Cdouble(i + 1)
+            end
+            (elco[nq + 1])[1] = pint * rq1fac
+            (elco[nq + 1])[2] = 1.0
+            (elco[nq + 1])[(i + 1) + 1] = (rq1fac * pc[i + 1]) / Cdouble(i)
+            agamq = rqfac * xpin
+            ragq = 1.0 / agamq
+            (tesco[nq + 1])[2] = ragq
+            if nq < 12
+                (tesco[nqp1 + 1])[1] = (ragq * rqfac) / Cdouble(nqp1)
+            end
+            (tesco[nqm1 + 1])[3] = ragq
+        end
+        return
+    end
+    pc[1] = 1.0
+    rq1fac = 1.0
+    begin
+        fnq = Cdouble(nq)
+        nqp1 = nq + 1
+        pc[nqp1 + 1] = 0.0
+        pc[i + 1] = pc[(i - 1) + 1] + fnq * pc[i + 1]
+        pc[1] *= fnq
+        (elco[nq + 1])[i + 1] = pc[i + 1] / pc[2]
+        (elco[nq + 1])[2] = 1.0
+        (tesco[nq + 1])[1] = rq1fac
+        (tesco[nq + 1])[2] = Cdouble(nqp1) / (elco[nq + 1])[1]
+        (tesco[nq + 1])[3] = Cdouble(nq + 2) / (elco[nq + 1])[1]
+        rq1fac /= fnq
+    end
+    return
+end
+function scaleh(rh, pdh)
+    local r
+    local j
+    local i
+    rh[] = @warn("min(*rh,rmax)")
+    rh[] = rh[] / @warn("max(1.,fabs(h)*hmxi**rh)")
+    if meth == 1
+        irflag = 0
+        pdh[] = @warn("max(fabs(h)*pdlast,0.000001)")
+        if (rh[] * pdh[]) * 1.00001 >= sm1[nq + 1]
+            rh[] = sm1[nq + 1] / pdh[]
+            irflag = 1
+        end
+    end
+    r = 1.0
+    begin
+        r *= rh[]
+        yp1 = yh[j + 1]
+        yp1[i + 1] *= r
+    end
+    h *= rh[]
+    rc *= rh[]
+    ialth = l
+end
+function fnorm(n, a, w)
+    local i
+    local j
+    local an
+    local sum
+    local ap1
+    an = 0.0
+    begin
+        sum = 0.0
+        ap1 = a[i + 1]
+        sum += fabs(ap1[j + 1]) / w[j + 1]
+        an = @warn("max(an,sum*w[i])")
+    end
+    return an
+end
+function vmnorm(n, v, w)
+    local i
+    local vm
+    vm = 0.0
+    vm = @warn("max(vm,fabs(v[i])*w[i])")
+    return vm
+end
+
+ETA = eps()
+
 g_nyh = 0
 g_lenyh = 0
 ml
@@ -459,7 +1326,7 @@ function terminate(istate)
 end
 function terminate2(y, t)
     local i
-    yp1 = yh[2]
+    yp1 = yh[1]
     y[i + 1] = yp1[i + 1]
     t[] = tn
     illin = 0
@@ -468,7 +1335,7 @@ function terminate2(y, t)
 end
 function successreturn(y, t, itask, ihit, tcrit, istate)
     local i
-    yp1 = yh[2]
+    yp1 = yh[1]
     y[i + 1] = yp1[i + 1]
     t[] = tn
     if itask == 4 || itask == 5
@@ -584,8 +1451,8 @@ function lsoda(f, neq, y, t, tout, itol, rtol, atol, itask, istate, iopt, jt, iw
             hmin = 0.0
             if istate[] == 1
                 h0 = 0.0
-                mxordn = mord[2]
-                mxords = mord[3]
+                mxordn = mord[1]
+                mxords = mord[2]
             end
         else
             ixpr = iwork5
@@ -715,8 +1582,8 @@ function lsoda(f, neq, y, t, tout, itol, rtol, atol, itask, istate, iopt, jt, iw
         end
     end
     if istate[] == 1 || istate[] == 3
-        rtoli = rtol[2]
-        atoli = atol[2]
+        rtoli = rtol[1]
+        atoli = atol[1]
         begin
             if itol >= 3
                 rtoli = rtol[i + 1]
@@ -770,9 +1637,9 @@ function lsoda(f, neq, y, t, tout, itol, rtol, atol, itask, istate, iopt, jt, iw
         maxcor = 3
         msbp = 20
         mxncf = 10
-        (t[], y + 1, yh[3] + 1, _data)
+        (t[], y + 1, yh[2] + 1, _data)
         nfe = 1
-        yp1 = yh[2]
+        yp1 = yh[1]
         yp1[i + 1] = y[i + 1]
         nq = 1
         h = 1.0
@@ -794,12 +1661,12 @@ function lsoda(f, neq, y, t, tout, itol, rtol, atol, itask, istate, iopt, jt, iw
                 freevectors()
                 return
             end
-            tol = rtol[2]
+            tol = rtol[1]
             if itol > 2
                 tol = @warn("max(tol,rtol[i])")
             end
             if tol <= 0.0
-                atoli = atol[2]
+                atoli = atol[1]
                 begin
                     if itol == 2 || itol == 4
                         atoli = atol[i + 1]
@@ -812,7 +1679,7 @@ function lsoda(f, neq, y, t, tout, itol, rtol, atol, itask, istate, iopt, jt, iw
             end
             tol = @warn("max(tol,100.*ETA)")
             tol = @warn("min(tol,0.001)")
-            sum = vmnorm(n, yh[3], ewt)
+            sum = vmnorm(n, yh[2], ewt)
             sum = 1.0 / ((tol * w0) * w0) + (tol * sum) * sum
             h0 = 1.0 / sqrt(sum)
             h0 = @warn("min(h0,tdist)")
@@ -827,7 +1694,7 @@ function lsoda(f, neq, y, t, tout, itol, rtol, atol, itask, istate, iopt, jt, iw
             h0 /= rh
         end
         h = h0
-        yp1 = yh[3]
+        yp1 = yh[2]
         yp1[i + 1] *= h0
     end
     if istate[] == 2 || istate[] == 3
@@ -928,7 +1795,7 @@ function lsoda(f, neq, y, t, tout, itol, rtol, atol, itask, istate, iopt, jt, iw
                 terminate2(y, t)
                 return
             end
-            ewset(itol, rtol, atol, yh[2])
+            ewset(itol, rtol, atol, yh[1])
             begin
                 if ewt[i + 1] <= 0.0
                     fprintf(__stderrp, "[lsoda] ewt[%d] = %g <= 0.\n", i, ewt[i + 1])
@@ -939,7 +1806,7 @@ function lsoda(f, neq, y, t, tout, itol, rtol, atol, itask, istate, iopt, jt, iw
                 ewt[i + 1] = 1.0 / ewt[i + 1]
             end
         end
-        tolsf = ETA * vmnorm(n, yh[2], ewt)
+        tolsf = ETA * vmnorm(n, yh[1], ewt)
         if tolsf > 0.01
             tolsf = tolsf * 200.0
             if nst == 0
@@ -1112,9 +1979,9 @@ function stoda(neq, y, f, _data)
         pdlast = 0.0
         ratio = 5.0
         cfode(2)
-        cm2[i + 1] = (tesco[i + 1])[3] * (elco[i + 1])[(i + 1) + 1]
+        cm2[i + 1] = (tesco[i + 1])[2] * (elco[i + 1])[(i + 1) + 1]
         cfode(1)
-        cm1[i + 1] = (tesco[i + 1])[3] * (elco[i + 1])[(i + 1) + 1]
+        cm1[i + 1] = (tesco[i + 1])[2] * (elco[i + 1])[(i + 1) + 1]
         resetcoeff()
     end
     if jstart == -1
@@ -1155,7 +2022,7 @@ function stoda(neq, y, f, _data)
                 yp2 = yh[(i1 + 1) + 1]
                 yp1[i + 1] += yp2[i + 1]
             end
-            pnorm = vmnorm(n, yh[2], ewt)
+            pnorm = vmnorm(n, yh[1], ewt)
             @c correction(neq, y, f, &corflag, pnorm, &del, &delp, &told, &ncf, &rh, &m, _data)
             if corflag == 0
                 break
@@ -1174,10 +2041,10 @@ function stoda(neq, y, f, _data)
         end
         jcur = 0
         if m == 0
-            dsm = del / (tesco[nq + 1])[3]
+            dsm = del / (tesco[nq + 1])[2]
         end
         if m > 0
-            dsm = vmnorm(n, acor, ewt) / (tesco[nq + 1])[3]
+            dsm = vmnorm(n, acor, ewt) / (tesco[nq + 1])[2]
         end
         if dsm <= 1.0
             kflag = 0
@@ -1207,7 +2074,7 @@ function stoda(neq, y, f, _data)
                 if l != lmax
                     yp1 = yh[lmax + 1]
                     savf[i + 1] = acor[i + 1] - yp1[i + 1]
-                    dup = vmnorm(n, savf, ewt) / (tesco[nq + 1])[4]
+                    dup = vmnorm(n, savf, ewt) / (tesco[nq + 1])[3]
                     exup = 1.0 / Cdouble(l + 1)
                     rhup = 1.0 / (1.4 * pow(dup, exup) + 1.4e-6)
                 end
@@ -1281,11 +2148,11 @@ function stoda(neq, y, f, _data)
                     rh = 0.1
                     rh = @warn("max(hmin/fabs(h),rh)")
                     h *= rh
-                    yp1 = yh[2]
+                    yp1 = yh[1]
                     y[i + 1] = yp1[i + 1]
                     (tn, y + 1, savf + 1, _data)
                     nfe += 1
-                    yp1 = yh[3]
+                    yp1 = yh[2]
                     yp1[i + 1] = h * savf[i + 1]
                     ipup = miter
                     ialth = 5
@@ -1305,13 +2172,13 @@ function ewset(itol, rtol, atol, ycur)
     local i
     @switch itol begin
             @case 1
-            ewt[i + 1] = rtol[2] * fabs(ycur[i + 1]) + atol[2]
+            ewt[i + 1] = rtol[1] * fabs(ycur[i + 1]) + atol[1]
             break
             @case 2
-            ewt[i + 1] = rtol[2] * fabs(ycur[i + 1]) + atol[i + 1]
+            ewt[i + 1] = rtol[1] * fabs(ycur[i + 1]) + atol[i + 1]
             break
             @case 3
-            ewt[i + 1] = rtol[i + 1] * fabs(ycur[i + 1]) + atol[2]
+            ewt[i + 1] = rtol[i + 1] * fabs(ycur[i + 1]) + atol[1]
             break
             @case 4
             ewt[i + 1] = rtol[i + 1] * fabs(ycur[i + 1]) + atol[i + 1]
@@ -1376,13 +2243,13 @@ function cfode(meth)
     local tsign
     local xpin
     if meth == 1
-        (elco[2])[2] = 1.0
-        (elco[2])[3] = 1.0
-        (tesco[2])[2] = 0.0
-        (tesco[2])[3] = 2.0
-        (tesco[3])[2] = 1.0
-        (tesco[13])[4] = 0.0
-        pc[2] = 1.0
+        (elco[1])[1] = 1.0
+        (elco[1])[2] = 1.0
+        (tesco[1])[1] = 0.0
+        (tesco[1])[2] = 2.0
+        (tesco[2])[1] = 1.0
+        (tesco[12])[3] = 0.0
+        pc[1] = 1.0
         rqfac = 1.0
         begin
             rq1fac = rqfac
@@ -1392,41 +2259,41 @@ function cfode(meth)
             nqp1 = nq + 1
             pc[nq + 1] = 0.0
             pc[i + 1] = pc[(i - 1) + 1] + fnqm1 * pc[i + 1]
-            pc[2] = fnqm1 * pc[2]
-            pint = pc[2]
-            xpin = pc[2] / 2.0
+            pc[1] = fnqm1 * pc[1]
+            pint = pc[1]
+            xpin = pc[1] / 2.0
             tsign = 1.0
             begin
                 tsign = -tsign
                 pint += (tsign * pc[i + 1]) / Cdouble(i)
                 xpin += (tsign * pc[i + 1]) / Cdouble(i + 1)
             end
-            (elco[nq + 1])[2] = pint * rq1fac
-            (elco[nq + 1])[3] = 1.0
+            (elco[nq + 1])[1] = pint * rq1fac
+            (elco[nq + 1])[2] = 1.0
             (elco[nq + 1])[(i + 1) + 1] = (rq1fac * pc[i + 1]) / Cdouble(i)
             agamq = rqfac * xpin
             ragq = 1.0 / agamq
-            (tesco[nq + 1])[3] = ragq
+            (tesco[nq + 1])[2] = ragq
             if nq < 12
-                (tesco[nqp1 + 1])[2] = (ragq * rqfac) / Cdouble(nqp1)
+                (tesco[nqp1 + 1])[1] = (ragq * rqfac) / Cdouble(nqp1)
             end
-            (tesco[nqm1 + 1])[4] = ragq
+            (tesco[nqm1 + 1])[3] = ragq
         end
         return
     end
-    pc[2] = 1.0
+    pc[1] = 1.0
     rq1fac = 1.0
     begin
         fnq = Cdouble(nq)
         nqp1 = nq + 1
         pc[nqp1 + 1] = 0.0
         pc[i + 1] = pc[(i - 1) + 1] + fnq * pc[i + 1]
-        pc[2] *= fnq
-        (elco[nq + 1])[i + 1] = pc[i + 1] / pc[3]
-        (elco[nq + 1])[3] = 1.0
-        (tesco[nq + 1])[2] = rq1fac
-        (tesco[nq + 1])[3] = Cdouble(nqp1) / (elco[nq + 1])[2]
-        (tesco[nq + 1])[4] = Cdouble(nq + 2) / (elco[nq + 1])[2]
+        pc[1] *= fnq
+        (elco[nq + 1])[i + 1] = pc[i + 1] / pc[2]
+        (elco[nq + 1])[2] = 1.0
+        (tesco[nq + 1])[1] = rq1fac
+        (tesco[nq + 1])[2] = Cdouble(nqp1) / (elco[nq + 1])[1]
+        (tesco[nq + 1])[3] = Cdouble(nq + 2) / (elco[nq + 1])[1]
         rq1fac /= fnq
     end
     return
@@ -1528,7 +2395,7 @@ function correction(neq, y, f, corflag, pnorm, del, delp, told, ncf, rh, m, _dat
     corflag[] = 0
     rate = 0.0
     del[] = 0.0
-    yp1 = yh[2]
+    yp1 = yh[1]
     y[i + 1] = yp1[i + 1]
     (tn, y + 1, savf + 1, _data)
     nfe += 1
@@ -1548,24 +2415,26 @@ function correction(neq, y, f, corflag, pnorm, del, delp, told, ncf, rh, m, _dat
             acor[i + 1] = 0.0
         end
         if miter == 0
-            yp1 = yh[3]
+            yp1 = yh[2]
             begin
                 savf[i + 1] = h * savf[i + 1] - yp1[i + 1]
                 y[i + 1] = savf[i + 1] - acor[i + 1]
             end
-            yp1 = yh[2]
+            del[] = vmnorm(n, y, ewt)
+            yp1 = yh[1]
             begin
-                y[i + 1] = yp1[i + 1] + el[2] * savf[i + 1]
+                y[i + 1] = yp1[i + 1] + el[1] * savf[i + 1]
                 acor[i + 1] = savf[i + 1]
             end
         else
-            yp1 = yh[3]
+            yp1 = yh[2]
             y[i + 1] = h * savf[i + 1] - (yp1[i + 1] + acor[i + 1])
             solsy(y)
-            yp1 = yh[2]
+            del[] = vmnorm(n, y, ewt)
+            yp1 = yh[1]
             begin
                 acor[i + 1] += y[i + 1]
-                y[i + 1] = yp1[i + 1] + el[2] * acor[i + 1]
+                y[i + 1] = yp1[i + 1] + el[1] * acor[i + 1]
             end
         end
         if del[] <= (100.0pnorm) * ETA
@@ -1580,7 +2449,7 @@ function correction(neq, y, f, corflag, pnorm, del, delp, told, ncf, rh, m, _dat
                 rate = @warn("max(rate,rm)")
                 crate = @warn("max(0.2*crate,rm)")
             end
-            dcon = (del[] * @warn("min(1.,1.5*crate)")) / ((tesco[nq + 1])[3] * conit)
+            dcon = (del[] * @warn("min(1.,1.5*crate)")) / ((tesco[nq + 1])[2] * conit)
             if dcon <= 1.0
                 pdest = @warn("max(pdest,rate/fabs(h*el[1]))")
                 if pdest != 0.0
@@ -1599,7 +2468,7 @@ function correction(neq, y, f, corflag, pnorm, del, delp, told, ncf, rh, m, _dat
             m[] = 0
             rate = 0.0
             del[] = 0.0
-            yp1 = yh[2]
+            yp1 = yh[1]
             y[i + 1] = yp1[i + 1]
             (tn, y + 1, savf + 1, _data)
             nfe += 1
@@ -1681,6 +2550,7 @@ function methodswitch(dsm, pnorm, pdh, rh)
                 lm2 = mxords + 1
                 exm2 = 1.0 / Cdouble(lm2)
                 lm2p1 = lm2 + 1
+                dm2 = vmnorm(n, yh[lm2p1 + 1], ewt) / cm2[mxords + 1]
                 rh2 = 1.0 / (1.2 * pow(dm2, exm2) + 1.2e-6)
             else
                 dm2 = dsm * (cm1[nq + 1] / cm2[nq + 1])
@@ -1706,6 +2576,7 @@ function methodswitch(dsm, pnorm, pdh, rh)
         lm1 = mxordn + 1
         exm1 = 1.0 / Cdouble(lm1)
         lm1p1 = lm1 + 1
+        dm1 = vmnorm(n, yh[lm1p1 + 1], ewt) / cm1[mxordn + 1]
         rh1 = 1.0 / (1.2 * pow(dm1, exm1) + 1.2e-6)
     else
         dm1 = dsm * (cm2[nq + 1] / cm1[nq + 1])
@@ -1739,7 +2610,7 @@ end
 function endstoda()
     local r
     local i
-    r = 1.0 / (tesco[nqu + 1])[3]
+    r = 1.0 / (tesco[nqu + 1])[2]
     acor[i + 1] *= r
     hold = h
     jstart = 1
@@ -1758,6 +2629,7 @@ function orderswitch(rhup, dsm, pdh, rh, orderflag)
     rhsm = 1.0 / (1.2 * pow(dsm, exsm) + 1.2e-6)
     rhdn = 0.0
     if nq != 1
+        ddn = vmnorm(n, yh[l + 1], ewt) / (tesco[nq + 1])[1]
         exdn = 1.0 / Cdouble(nq)
         rhdn = 1.0 / (1.3 * pow(ddn, exdn) + 1.3e-6)
     end
@@ -1835,8 +2707,8 @@ function resetcoeff()
     local ep1
     ep1 = elco[nq + 1]
     el[i + 1] = ep1[i + 1]
-    rc = (rc * el[2]) / el0
-    el0 = el[2]
+    rc = (rc * el[1]) / el0
+    el0 = el[1]
     conit = 0.5 / Cdouble(nq + 2)
 end
 function freevectors()
@@ -1893,6 +2765,9 @@ function n_lsoda(y, n, x, xout, eps, yscal, devis, data)
         end
 end
 function n_lsoda_terminate()
+    if init
+        _freevectors()
+    end
     init = 0
 end
 
