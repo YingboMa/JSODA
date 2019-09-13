@@ -1,0 +1,6 @@
+name = "JSODA"
+uuid = "82e44628-bb90-4b10-bc8e-756e61ba0f93"
+authors = ["Yingbo Ma <mayingbo5@gmail.com>"]
+version = "0.1.0"
+
+[deps]
